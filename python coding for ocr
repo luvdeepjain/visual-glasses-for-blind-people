@@ -1,0 +1,150 @@
+import cv2
+import easyocr
+import sys
+import numpy as np
+import os # For file handling (gTTS output)
+import time
+from gtts import gTTS
+from playsound import playsound # For playing the gTTS MP3
+
+# --- 1. Initialize EasyOCR Reader ---
+try:
+    reader = easyocr.Reader(['en'], verbose=False) 
+    print("âœ… EasyOCR model loaded successfully.")
+except Exception as e:
+    print(f"âŒ Error loading EasyOCR model: {e}")
+    sys.exit(1)
+
+# --- 2. Define Temporary Audio File Path ---
+TEMP_AUDIO_FILE = "temp_speech.mp3"
+
+# --- 3. Function to speak detected text using gTTS and playsound ---
+def speak_text(text):
+    """Uses gTTS to generate and play audio for the provided text."""
+    if text and text.strip():
+        try:
+            clean_text = text.replace('\n', ' ').strip()
+            print(f"ðŸ—£ï¸ Generating and playing speech for: {clean_text}")
+            
+            # Create the gTTS object (lang='en' is English)
+            tts = gTTS(text=clean_text, lang='en')
+            
+            # Save the speech to a temporary MP3 file
+            tts.save(TEMP_AUDIO_FILE)
+            
+            # Play the MP3 file
+            playsound(TEMP_AUDIO_FILE)
+            
+            # Clean up the temporary file
+            os.remove(TEMP_AUDIO_FILE)
+            print("ðŸ”Š Speech finished.")
+            
+        except Exception as e:
+            print(f"âŒ Error in speech output (gTTS or playsound): {e}")
+            # Ensure file is removed even if playback fails
+            if os.path.exists(TEMP_AUDIO_FILE):
+                os.remove(TEMP_AUDIO_FILE)
+            print("âš ï¸ Check your internet connection for gTTS, and check playsound installation.")
+    else:
+        print("âš ï¸ No text to speak.")
+
+
+# --- 4. Initialize Camera and Define ROI ---
+# Note: Removed the pyttsx3 initialization/cleanup sections.
+cap = cv2.VideoCapture(0, cv2.CAP_V4L2) 
+if not cap.isOpened():
+    print("âŒ Cannot open camera. Please check the connection or permissions.")
+    sys.exit(1)
+
+# Set high resolution for better OCR accuracy
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+# --- Define Cropping/ROI Coordinates (TUNE THESE MANUALLY) ---
+CROP_X_START = 350
+CROP_Y_START = 150
+CROP_X_END = 950
+CROP_Y_END = 900
+
+print("\n------------------------------------------------")
+print("  Real-Time OCR & Auditory Assistant Loaded (gTTS)")
+print("------------------------------------------------")
+print("Place the document inside the blue box.")
+print("Press 's' to scan text and read it aloud.")
+print("Press 'q' to quit.")
+print("------------------------------------------------\n")
+
+
+# --- 5. Main Loop ---
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("âš ï¸ Failed to grab frame.")
+        break
+        
+    # Draw the ROI rectangle on the live feed for visual guidance
+    cv2.rectangle(frame, (CROP_X_START, CROP_Y_START), (CROP_X_END, CROP_Y_END), (255, 0, 0), 3)
+
+    # Display Instructions and Live Feed
+    cv2.putText(frame, "Press 's' to SCAN | Press 'q' to QUIT", (20, 40), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2, cv2.LINE_AA)
+    cv2.imshow("ðŸ“· Live Feed - Real-Time OCR", frame)
+
+    key = cv2.waitKey(1) & 0xFF
+
+    if key == ord('s'):
+        print("\nðŸ” Scanning for text...")
+
+        # ---------------------------
+        # STEP 5.1: CROP THE IMAGE
+        # ---------------------------
+        cropped_frame = frame[CROP_Y_START:CROP_Y_END, CROP_X_START:CROP_X_END]
+        img_to_process = cropped_frame
+        
+        # --- Image Preprocessing for OCR ---
+        
+        # 1. Convert to grayscale
+        gray = cv2.cvtColor(img_to_process, cv2.COLOR_BGR2GRAY)
+        
+        # 2. Adaptive Thresholding 
+        thresh = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 11, 2 
+        )
+        
+        # Display the processed image briefly 
+        cv2.imshow("Processed Image", thresh)
+        cv2.waitKey(500) 
+
+        # --- Perform OCR ---
+        # Note: Added wait time to allow for the visual feedback before OCR starts
+        # time.sleep(0.1) 
+        
+        results = reader.readtext(
+            thresh, 
+            detail=0,
+            paragraph=True,
+            mag_ratio=1.5,
+            low_text=0.4 
+        )
+
+        detected_text = ' '.join(results)
+
+        # --- Output and Speech ---
+        if detected_text:
+            print("\nðŸ“– Detected Text:\n" + detected_text)
+            print("-" * 40)
+            speak_text(detected_text)
+        else:
+            print("âŒ No text detected.")
+
+    elif key == ord('q'):
+        print("ðŸ‘‹ Exiting...")
+        break
+
+# --- 6. Release Resources ---
+cap.release()
+cv2.destroyAllWindows()
+# Check and remove the temporary file one last time on exit
+if os.path.exists(TEMP_AUDIO_FILE):
+    os.remove(TEMP_AUDIO_FILE)
