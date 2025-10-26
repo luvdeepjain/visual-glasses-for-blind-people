@@ -1,0 +1,165 @@
+import time
+import lgpio
+import numpy as np
+import statistics
+import os
+
+# New libraries for gTTS (Google Text-to-Speech)
+from gtts import gTTS
+from playsound import playsound 
+
+# --- CONFIGURATION ---
+# BCM Pin numbers
+PIN_TRIGGER = 23    # Ultrasonic Sensor TRIG
+PIN_ECHO = 24       # Ultrasonic Sensor ECHO (via voltage divider)
+PIN_STOP_BUTTON = 17 # GPIO pin for the Stop Button (Physical Pin 11)
+
+# Alert Settings
+ALERT_DISTANCE_M = 3.3  # Threshold for voice alert (in meters)
+NUM_READINGS = 5        # Number of readings to average for stability
+SPEED_OF_SOUND_MPS = 343.2 # Speed of sound (m/s)
+
+# File for temporary audio storage
+TEMP_AUDIO_FILE = 'alert.mp3'
+
+# --- INITIALIZATION ---
+
+# 1. Initialize lgpio
+try:
+    h = lgpio.gpiochip_open(0)
+    lgpio.gpio_claim_output(h, PIN_TRIGGER)
+    lgpio.gpio_claim_input(h, PIN_ECHO)
+    lgpio.gpio_claim_input(h, PIN_STOP_BUTTON)
+    
+except Exception as e:
+    print(f"Error initializing lgpio: {e}")
+    print("Ensure you are running the script with 'sudo python ultra.py'")
+    exit()
+
+# 2. Initialize and Define speak function for gTTS
+def speak(text):
+    """Helper function for text-to-speech output using gTTS and playsound."""
+    print(f"VOICE ALERT: {text}")
+    try:
+        # Create a gTTS object
+        tts = gTTS(text=text, lang='en')
+        # Save the speech to a temporary MP3 file
+        tts.save(TEMP_AUDIO_FILE)
+        # Play the MP3 file. playsound is blocking, similar to runAndWait().
+        playsound(TEMP_AUDIO_FILE)
+        # Clean up the temporary file
+        os.remove(TEMP_AUDIO_FILE)
+    except Exception as e:
+        print(f"gTTS/playsound Error: {e}")
+        print("WARNING: Could not generate or play audio. Check internet connection and playsound dependencies.")
+
+print("gTTS voice initialized. Requires internet connection.")
+
+
+# --- ULTRASONIC MEASUREMENT FUNCTION ---
+
+def get_distance_meters(handle):
+    """Measures distance using the HC-SR04 sensor."""
+    
+    # Send 10Âµs pulse to trigger
+    lgpio.gpio_write(handle, PIN_TRIGGER, 0)
+    time.sleep(0.000002) 
+    lgpio.gpio_write(handle, PIN_TRIGGER, 1)
+    time.sleep(0.00001)
+    lgpio.gpio_write(handle, PIN_TRIGGER, 0)
+    
+    # Time the pulse duration on the ECHO pin
+    start_time = time.time()
+    timeout = start_time + 0.1
+    while lgpio.gpio_read(handle, PIN_ECHO) == 0 and time.time() < timeout:
+        start_time = time.time()
+        
+    stop_time = time.time()
+    timeout = stop_time + 0.1
+    while lgpio.gpio_read(handle, PIN_ECHO) == 1 and time.time() < timeout:
+        stop_time = time.time()
+
+    pulse_duration = stop_time - start_time
+    
+    # Distance = (Time * Speed of Sound) / 2
+    distance = (pulse_duration * SPEED_OF_SOUND_MPS) / 2
+
+    return distance
+
+def stable_distance_reading(handle):
+    """Takes multiple readings and returns the median to filter out spikes."""
+    readings = []
+    for _ in range(NUM_READINGS):
+        # Allow enough time for a single reading cycle
+        readings.append(get_distance_meters(handle))
+        time.sleep(0.01)
+        
+    valid_readings = [d for d in readings if 0.02 < d < 4.0]
+
+    if not valid_readings:
+        # Fallback to mean if all readings are invalid
+        return np.mean(readings) 
+    else:
+        # Use the median for robustness against outliers
+        return statistics.median(valid_readings)
+
+
+# --- MAIN LOOP ---
+
+print(f"Ultrasonic Alert System Started (Threshold: {ALERT_DISTANCE_M} m)")
+speak("System initialized. Monitoring distance.")
+
+# State variable to track the current verbal status (to prevent constant chatter)
+# 'SAFE' means distance >= 3.3m; 'ALERT' means distance < 3.3m
+current_status = None 
+
+try:
+    while True:
+        # 1. Check for Stop Button Press
+        if lgpio.gpio_read(h, PIN_STOP_BUTTON) == 1:
+            speak("Stop button pressed. System shutting down.")
+            break # Exit the while loop
+        
+        # 2. Get Distance
+        distance = stable_distance_reading(h)
+        distance_cm = round(distance * 100, 1)
+        
+        # 3. Decision Logic and State Update
+        
+        if distance >= ALERT_DISTANCE_M:
+            # Condition: Safe (Go)
+            new_status = 'SAFE'
+            message = f"Distance: {distance_cm} cm. Current status: SAFE."
+            
+            if current_status != new_status:
+                # Only speak if the status has changed from ALERT to SAFE
+                speak("Go. Path is clear.")
+                current_status = new_status
+                
+        else:
+            # Condition: Alert (Don't Go)
+            new_status = 'ALERT'
+            message = f"Distance: {distance_cm} cm. Current status: ALERT!"
+            
+            if current_status != new_status:
+                # Only speak if the status has changed from SAFE to ALERT
+                speak("Don't go. Obstacle detected.")
+                current_status = new_status
+                
+        print(message)
+        
+        # Wait a moment before the next distance check
+        time.sleep(0.5) 
+
+except KeyboardInterrupt:
+    print("\nProgram stopped by user (Ctrl+C).")
+
+finally:
+    # 4. Cleanup GPIO on exit
+    lgpio.gpiochip_close(h)
+    
+    # Remove the temporary audio file if it somehow remained
+    if os.path.exists(TEMP_AUDIO_FILE):
+        os.remove(TEMP_AUDIO_FILE)
+        
+    print("GPIO cleanup complete. Goodbye.")
