@@ -1,5 +1,4 @@
 # visual-glasses-for-visually-impaired -people
-That's an excellent, well-structured project summary! Here is the revised version, with the word "Drishti" replaced by the descriptive phrase "Smart Glasses for Visually Impaired People" throughout the text:
 
 Project Overview: Smart Glasses for Visually Impaired People
 Smart Glasses for Visually Impaired People is an innovative, glasses-mounted device designed to enhance the safety and independence of visually impaired individuals. It integrates two crucial technologies—an ultrasonic sensor and a web camera—to provide comprehensive environmental awareness through intuitive, customizable voice commands.
